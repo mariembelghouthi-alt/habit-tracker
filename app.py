@@ -562,7 +562,7 @@ HEARTS = {"#f9a8d4": "💓", "#ec4899": "💗", "#db2777": "💖", "#a855f7": "�
 def cloud_settings():
     """Online database (Turso) if configured via environment variables or Streamlit secrets."""
     url, token = os.environ.get("TURSO_DATABASE_URL"), os.environ.get("TURSO_AUTH_TOKEN")
-    if not url:
+    if not url and _secrets_file_exists():
         try:
             url, token = st.secrets.get("TURSO_DATABASE_URL"), st.secrets.get("TURSO_AUTH_TOKEN")
         except Exception:
@@ -570,7 +570,20 @@ def cloud_settings():
     return url, token
 
 
+def _secrets_file_exists():
+    """Only look at st.secrets if a secrets file exists (otherwise Streamlit shows an error box)."""
+    try:
+        from streamlit import config
+        paths = config.get_option("secrets.files")
+    except Exception:
+        paths = getattr(st.secrets, "_file_paths", None) or []
+    return any(os.path.exists(p) for p in paths)
+
+
 CLOUD_URL, CLOUD_TOKEN = cloud_settings()
+# Streamlit Cloud runs apps from /mount/src. There a local file would be wiped on every restart,
+# so the app must never run there without the online database.
+ON_STREAMLIT_CLOUD = str(Path(__file__).resolve()).startswith("/mount/src")
 
 
 def _plain(params):
@@ -2356,8 +2369,17 @@ def phone_box():
 # ============================================================
 # Start
 # ============================================================
+if ON_STREAMLIT_CLOUD and not CLOUD_URL:
+    st.error("⚠️ The online database is not connected, so nothing would be saved. "
+             "Please add TURSO_DATABASE_URL and TURSO_AUTH_TOKEN under Manage app → Settings → Secrets.")
+    st.stop()
 if CLOUD_URL:
-    init_db_once()   # online: only once per app start, keeps it fast
+    try:
+        init_db_once()
+    except Exception as e:
+        st.error(f"⚠️ Could not reach the online database ({type(e).__name__}). "
+                 "Please check the URL and token in the secrets, then reload.")
+        st.stop()   # online: only once per app start, keeps it fast
 else:
     init_db()
 PAUSED.update(load_pauses())
@@ -2368,6 +2390,7 @@ st.sidebar.title("🌸 Habit Tracker")
 page = st.sidebar.radio("Navigation", ["🌷 Daily Habit Garden", "📝 Daily Planner", "📊 Overview", "🎀 Manage habits"],
                         label_visibility="collapsed")
 st.sidebar.caption("Small steps, big glow-up ✨")
+st.sidebar.caption("☁️ Saved online (Turso)" if CLOUD_URL else "💻 Saved on this PC only")
 with st.sidebar:
     affirmation_card(today_local())
     rules_box()
